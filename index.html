@@ -46,7 +46,14 @@ async function deriveKey(password, salt) {
   );
 }
 async function unlock(password) {
-  const N = 7;
+  let N = 7;
+  try {
+    const meta = await fetch("p/n.txt", { cache: "no-store" });
+    if (meta.ok) {
+      const n = parseInt((await meta.text()).trim(), 10);
+      if (Number.isFinite(n) && n > 0 && n < 200) N = n;
+    }
+  } catch (e) {}
   const chunks = [];
   for (let i = 0; i < N; i++) {
     const res = await fetch("p/" + i + ".b64", { cache: "no-store" });
