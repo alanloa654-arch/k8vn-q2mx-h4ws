@@ -22,18 +22,52 @@
   <form class="card" id="f" autocomplete="current-password">
     <h1>私人頁面</h1>
     <p>請輸入密碼，解鎖之後就可以用。</p>
-    <input id="pw" type="password" inputmode="text" autocapitalize="off" autocomplete="current-password" placeholder="密碼" required>
+    <input id="pw" type="password" inputmode="text" autocapitalize="off" autocomplete="current-password" spellcheck="false" placeholder="密碼" required>
     <button id="go" type="submit">解鎖</button>
     <div class="err" id="err"></div>
   </form>
 <script>
 const ITERS = 210000;
-function b64ToBytes(s) {
-  const bin = atob(s);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+const N = 7;
+const FALLBACK = "https://raw.githubusercontent.com/alanloa654-arch/k8vn-q2mx-h4ws/main/";
+
+function normalizePassword(s) {
+  return s.trim().replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, "-");
 }
+
+function b64ToBytes(s) {
+  const clean = s.replace(/\s+/g, "");
+  const out = new Uint8Array(Math.floor(clean.length * 3 / 4));
+  let offset = 0;
+  const step = 32768;
+  for (let i = 0; i < clean.length; i += step) {
+    const bin = atob(clean.slice(i, i + step));
+    for (let j = 0; j < bin.length; j++) out[offset++] = bin.charCodeAt(j);
+  }
+  return offset === out.length ? out : out.slice(0, offset);
+}
+
+function looksLikePayload(t) {
+  return t && t.length > 10000 && t[0] !== "<";
+}
+
+async function fetchText(url) {
+  const res = await fetch(url, { cache: "no-store", redirect: "follow" });
+  if (!res.ok) throw new Error("LOAD");
+  return (await res.text()).trim();
+}
+
+async function loadChunk(i) {
+  const name = "p/" + i + ".b64";
+  try {
+    const t = await fetchText(name);
+    if (looksLikePayload(t)) return t;
+  } catch (e) {}
+  const t = await fetchText(FALLBACK + name);
+  if (!looksLikePayload(t)) throw new Error("LOAD");
+  return t;
+}
+
 async function deriveKey(password, salt) {
   const enc = new TextEncoder();
   const material = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]);
@@ -45,45 +79,51 @@ async function deriveKey(password, salt) {
     ["decrypt"]
   );
 }
+
 async function unlock(password) {
-  let N = 7;
-  try {
-    const meta = await fetch("p/n.txt", { cache: "no-store" });
-    if (meta.ok) {
-      const n = parseInt((await meta.text()).trim(), 10);
-      if (Number.isFinite(n) && n > 0 && n < 200) N = n;
-    }
-  } catch (e) {}
   const chunks = [];
-  for (let i = 0; i < N; i++) {
-    const res = await fetch("p/" + i + ".b64", { cache: "no-store" });
-    if (!res.ok) throw new Error("載入失敗");
-    chunks.push((await res.text()).trim());
-  }
-  const packed = b64ToBytes(chunks.join(""));
-  if (packed.length < 29) throw new Error("檔案損壞");
+  for (let i = 0; i < N; i++) chunks.push(await loadChunk(i));
+  const parts = chunks.map(b64ToBytes);
+  let total = 0;
+  for (const p of parts) total += p.length;
+  const packed = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) { packed.set(p, off); off += p.length; }
+  if (packed.length < 29) throw new Error("LOAD");
   const salt = packed.slice(0, 16);
   const nonce = packed.slice(16, 28);
   const data = packed.slice(28);
   const key = await deriveKey(password, salt);
-  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce }, key, data);
+  let plain;
+  try {
+    plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce }, key, data);
+  } catch (e) {
+    throw new Error("PASSWORD");
+  }
   const html = new TextDecoder().decode(plain);
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   location.replace(URL.createObjectURL(blob));
 }
+
 const f = document.getElementById("f");
 const err = document.getElementById("err");
 const go = document.getElementById("go");
 f.addEventListener("submit", async (e) => {
   e.preventDefault();
   err.textContent = "";
-  const password = document.getElementById("pw").value;
+  const password = normalizePassword(document.getElementById("pw").value);
+  if (!password) {
+    err.textContent = "請輸入密碼。";
+    return;
+  }
   go.disabled = true;
   go.textContent = "解鎖緊…";
   try {
     await unlock(password);
   } catch (x) {
-    err.textContent = "密碼不正確，或者載入失敗，請再試一次。";
+    err.textContent = x && x.message === "PASSWORD"
+      ? "密碼不正確，請再試一次。"
+      : "載入失敗，請檢查網絡後再試。";
     go.disabled = false;
     go.textContent = "解鎖";
   }
