@@ -58,7 +58,7 @@ async function fetchText(url) {
 }
 
 async function loadChunk(i) {
-  const name = "p/" + i + ".b64";
+  const name = "p/" + i + ".b64?v=20261124c";
   try {
     const t = await fetchText(name);
     if (looksLikePayload(t)) return t;
