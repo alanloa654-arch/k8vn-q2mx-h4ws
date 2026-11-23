@@ -83,12 +83,10 @@ async function deriveKey(password, salt) {
 async function unlock(password) {
   const chunks = [];
   for (let i = 0; i < N; i++) chunks.push(await loadChunk(i));
-  const parts = chunks.map(b64ToBytes);
-  let total = 0;
-  for (const p of parts) total += p.length;
-  const packed = new Uint8Array(total);
-  let off = 0;
-  for (const p of parts) { packed.set(p, off); off += p.length; }
+  // Chunks are a split of one base64 stream and are not 4-char aligned.
+  // Decode the joined text once; decoding each chunk separately corrupts the payload
+  // and looks like a wrong password.
+  const packed = b64ToBytes(chunks.join(""));
   if (packed.length < 29) throw new Error("LOAD");
   const salt = packed.slice(0, 16);
   const nonce = packed.slice(16, 28);
